@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Beating left ventricle — Zhang atlas</title>
+<title>Beating ventricles — Zhang atlas</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -50,13 +50,13 @@
 <main>
   <div id="stage"><canvas id="view"></canvas></div>
   <aside>
-    <h1>Beating left ventricle</h1>
-    <p class="note">Mean end-diastolic and end-systolic shapes from the CardiacBubble Zhang atlas. The motion is a smooth blend of those two stored shapes.</p>
+    <h1>Beating ventricles</h1>
+    <p class="note">The left ventricle is the mean Zhang atlas. The right ventricle is the CardiacBubble septal shell, wrapped on that wall so it contracts with the same beat.</p>
     <div class="readout">
       <div><span>Phase</span><strong id="phase">—</strong></div>
-      <div><span>Mesh EF</span><strong id="ef">—</strong></div>
-      <div><span>Cavity, ED</span><strong id="edv">—</strong></div>
-      <div><span>Cavity, ES</span><strong id="esv">—</strong></div>
+      <div><span>LV mesh EF</span><strong id="ef">—</strong></div>
+      <div><span>LV cavity, ED</span><strong id="edv">—</strong></div>
+      <div><span>LV cavity, ES</span><strong id="esv">—</strong></div>
     </div>
     <label for="mix">Diastole to systole</label>
     <input id="mix" type="range" min="0" max="1000" value="0">
@@ -71,10 +71,11 @@
     <div class="checks">
       <label><input id="showEndo" type="checkbox" checked> Endocardium</label>
       <label><input id="showEpi" type="checkbox" checked> Epicardium</label>
+      <label><input id="showRv" type="checkbox" checked> Right ventricle</label>
     </div>
     <footer>
       Research test page. Atlas units, not millilitres. Drag the heart to rotate it. The wheel zooms.
-      Shape file <code>zhang_lv.bin</code> from CardiacBubble.
+      Shape file <code>zhang_lv.bin</code> from CardiacBubble. The right ventricle is not a second measured atlas.
       Zhang X et al. Orthogonal decomposition of left ventricular remodeling in myocardial infarction.
       <a href="https://doi.org/10.1093/gigascience/gix005">GigaScience 2017;6:1–15</a>.
       Cardiac Atlas Project.
@@ -185,13 +186,14 @@ function draw() {
   const w = canvas.width, h = canvas.height;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  const scale = Math.min(w, h) * 0.34 * zoom;
-  const cx = w * 0.5, cy = h * 0.52;
+  const scale = Math.min(w, h) * 0.26 * zoom;
+  const cx = w * 0.56, cy = h * 0.48;
   const dist = 4.2;
   const tris = [];
-  function pushMesh(pts, color, alpha) {
-    for (let i = 0; i < faces.length; i += 3) {
-      const ia = faces[i] * 3, ib = faces[i + 1] * 3, ic = faces[i + 2] * 3;
+  function pushMesh(pts, color, alpha, indices, cull) {
+    const idx = indices || faces;
+    for (let i = 0; i < idx.length; i += 3) {
+      const ia = idx[i] * 3, ib = idx[i + 1] * 3, ic = idx[i + 2] * 3;
       const ax = pts[ia], ay = pts[ia + 1], az = pts[ia + 2];
       const bx = pts[ib], by = pts[ib + 1], bz = pts[ib + 2];
       const cxp = pts[ic], cyp = pts[ic + 1], czp = pts[ic + 2];
@@ -207,11 +209,15 @@ function draw() {
       const vn = toView(mx + nx, my + ny, mz + nz);
       const vm = toView(mx, my, mz);
       const fnx = vn[0] - vm[0], fny = vn[1] - vm[1], fnz = vn[2] - vm[2];
-      if (fnz >= 0) continue;
+      if (cull !== false && fnz >= 0) continue;
       const len = Math.hypot(fnx, fny, fnz) || 1;
       const light = Math.max(0.48, Math.min(1, 0.62 + 0.5 * ((-fnx * 0.45 - fny * 0.75) / len)));
       tris.push({ va, vb, vc, depth, color, alpha, light });
     }
+  }
+  if (document.getElementById("showRv").checked) {
+    const rv = rightVentricle(curEpi);
+    pushMesh(rv.pts, [37, 99, 175], 0.34, rv.faces, false);
   }
   if (document.getElementById("showEpi").checked) pushMesh(curEpi, [141, 163, 184], 0.38);
   if (document.getElementById("showEndo").checked) pushMesh(curEndo, [224, 122, 95], 1);
@@ -302,6 +308,136 @@ mix.addEventListener("input", () => { playing = false; playBtn.textContent = "Pl
 speed.addEventListener("input", () => { speedVal.textContent = (Number(speed.value) / 10).toFixed(1) + " s"; });
 document.getElementById("showEndo").addEventListener("change", draw);
 document.getElementById("showEpi").addEventListener("change", draw);
+document.getElementById("showRv").addEventListener("change", draw);
+
+function epiField(pts) {
+  let z0 = Infinity, z1 = -Infinity;
+  for (let i = 2; i < pts.length; i += 3) {
+    if (pts[i] < z0) z0 = pts[i];
+    if (pts[i] > z1) z1 = pts[i];
+  }
+  const nz = 28, na = 48;
+  const acc = new Float32Array(nz * na);
+  const wt = new Float32Array(nz * na);
+  for (let i = 0; i < pts.length; i += 3) {
+    const rad = Math.hypot(pts[i], pts[i + 1]);
+    let u = (Math.atan2(pts[i + 1], pts[i]) + Math.PI) / (2 * Math.PI);
+    if (u >= 1) u = 0;
+    const t = (pts[i + 2] - z0) / Math.max(1e-6, z1 - z0);
+    const ia = Math.min(na - 1, Math.floor(u * na));
+    const iz = Math.min(nz - 1, Math.max(0, Math.floor(t * (nz - 1))));
+    const k = iz * na + ia;
+    acc[k] += rad;
+    wt[k] += 1;
+  }
+  const rad = new Float32Array(nz * na);
+  const known = new Uint8Array(nz * na);
+  for (let k = 0; k < rad.length; k++) {
+    if (wt[k]) { rad[k] = acc[k] / wt[k]; known[k] = 1; }
+  }
+  for (let pass = 0; pass < 8; pass++) {
+    const next = rad.slice();
+    const nextKnown = known.slice();
+    for (let iz = 0; iz < nz; iz++) {
+      for (let ia = 0; ia < na; ia++) {
+        const k = iz * na + ia;
+        if (known[k]) continue;
+        let sum = 0, count = 0;
+        for (let dz = -1; dz <= 1; dz++) {
+          const jz = iz + dz;
+          if (jz < 0 || jz >= nz) continue;
+          for (let da = -1; da <= 1; da++) {
+            const ja = (ia + da + na) % na;
+            const kk = jz * na + ja;
+            if (!known[kk]) continue;
+            sum += rad[kk];
+            count++;
+          }
+        }
+        if (count) { next[k] = sum / count; nextKnown[k] = 1; }
+      }
+    }
+    rad.set(next);
+    known.set(nextKnown);
+  }
+  return { z0, z1, nz, na, rad };
+}
+
+function epiRadius(field, az, z) {
+  let u = (az + Math.PI) / (2 * Math.PI);
+  u -= Math.floor(u);
+  const span = Math.max(1e-6, field.z1 - field.z0);
+  const t = Math.min(1, Math.max(0, (z - field.z0) / span));
+  const fa = u * field.na;
+  const fz = t * (field.nz - 1);
+  const ia = Math.floor(fa) % field.na;
+  const iz = Math.min(field.nz - 2, Math.floor(fz));
+  const ua = fa - Math.floor(fa);
+  const uz = fz - iz;
+  const ia2 = (ia + 1) % field.na;
+  const r00 = field.rad[iz * field.na + ia];
+  const r10 = field.rad[(iz + 1) * field.na + ia];
+  const r01 = field.rad[iz * field.na + ia2];
+  const r11 = field.rad[(iz + 1) * field.na + ia2];
+  return ((r00 * (1 - uz)) + (r10 * uz)) * (1 - ua) + ((r01 * (1 - uz)) + (r11 * uz)) * ua;
+}
+
+function rightVentricle(epi) {
+  const field = epiField(epi);
+  const longAxis = 2.2;
+  const scale = (field.z1 - field.z0) / longAxis;
+  const az0 = -1.28, az1 = 1.48;
+  const nz = 12, na = 16;
+  const zBase = field.z0 + (0.08 * scale);
+  const apexAz = 0.10;
+  const apexZ = field.z1 - (0.18 * scale);
+  const wallR = Math.max(0.10 * scale, epiRadius(field, apexAz, apexZ));
+  const capR = 0.62 * wallR;
+  const cx = (wallR * Math.cos(apexAz)) + (Math.cos(apexAz) * 0.55 * wallR);
+  const cy = (wallR * Math.sin(apexAz)) + (Math.sin(apexAz) * 0.20 * wallR);
+  const pts = new Float32Array((nz + 1) * (na + 1) * 3);
+  let n = 0;
+  for (let iz = 0; iz <= nz; iz++) {
+    const z = zBase + ((apexZ - zBase) * iz / nz);
+    for (let ia = 0; ia <= na; ia++) {
+      const az = az0 + ((az1 - az0) * ia / na);
+      const u = (az - az0) / (az1 - az0);
+      const bulge = Math.sin(Math.PI * Math.min(1, Math.max(0, u)));
+      const lvR = Math.max(0.10 * scale, epiRadius(field, az, z));
+      const t = Math.min(1, Math.max(0, (z - field.z0) / Math.max(1e-6, field.z1 - field.z0)));
+      const apical = Math.pow(t, 1.55);
+      const depth = (0.28 + (0.82 * bulge)) * lvR * (1 - (0.18 * apical));
+      let x = (lvR * Math.cos(az)) + (Math.cos(az) * depth);
+      let y = (lvR * Math.sin(az)) + (Math.sin(az) * depth * 0.78);
+      let zz = z - (0.08 * apical * lvR);
+      const blend = 0.38 * scale;
+      if (z > apexZ - blend) {
+        let s = Math.min(1, Math.max(0, (z - (apexZ - blend)) / blend));
+        s = s * s * (3 - (2 * s));
+        let dx = x - cx, dy = y - cy;
+        const len = Math.hypot(dx, dy) || 1;
+        dx /= len; dy /= len;
+        const eqx = cx + (dx * capR);
+        const eqy = cy + (dy * capR * 0.90);
+        x += (eqx - x) * s;
+        y += (eqy - y) * s;
+        zz += (apexZ - zz) * s;
+      }
+      pts[n++] = x; pts[n++] = y; pts[n++] = zz;
+    }
+  }
+  const stride = na + 1;
+  const faces = new Uint16Array(nz * na * 6);
+  let f = 0;
+  for (let iz = 0; iz < nz; iz++) {
+    for (let ia = 0; ia < na; ia++) {
+      const a = iz * stride + ia;
+      faces[f++] = a; faces[f++] = a + 1; faces[f++] = a + 1 + stride;
+      faces[f++] = a; faces[f++] = a + 1 + stride; faces[f++] = a + stride;
+    }
+  }
+  return { pts, faces };
+}
 canvas.addEventListener("pointerdown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId); });
 canvas.addEventListener("pointerup", () => { dragging = false; });
 canvas.addEventListener("pointermove", (e) => {
